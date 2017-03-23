@@ -1,14 +1,13 @@
-CXX = mpic++
-CC = mpicc
-GCXX = g++
-EXECS=server worker
+CXX=mpic++
+CC=mpicc
+GCXX=g++
+FLAGS=-O2
 
-all: ${EXECS}
-server: master.cc
-	${CXX} -o master master.cc
+evrsgd.out: main.o
+	${CXX} main.o -o evrsgd.out ${FLAGS}
 
-worker: worker.cc
-	${CXX} -o worker worker.cc
+main.o: main.cc
+	${CXX} -c main.cc -o main.o ${FLAGS}
 
 clean:
-	rm -f ${EXECS}
+	rm -f *.o *.out
