@@ -1,3 +1,4 @@
+#include <math.h>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,20 +14,20 @@
 #define NROW_TAG 4
 
 typedef struct Elements_ {
-	long colIdx;
-	double value;
+	long colIdx;       // column index of that value
+	double value;      // value in that element
 } Element;
 
 typedef struct DataRow_ {
-	int output;
-	long nLength;
-	Element *elements;
+	int output;        // y[i]
+	long nLength;      // nnz in that row
+	Element *elements; // data
 } DataRow;
 
 typedef struct Data_ {
-	long nCols;
-	long nRows;
-	DataRow *dataRows;
+	long nCols;        // number of columns
+	long nRows;        // number of rows
+	DataRow *dataRows; // data
 } Data;
 
 // load data from file, make sure data = NULL
@@ -208,6 +209,36 @@ void collectData(Data* data) {
 void server(Data* data, int nClients) {
 	//TODO
 	distributeData(data, nClients);
+	
+}
+
+// calculate the gradient, suppose the original problem is logistic regression
+// make sure len(w) == len(gradOut) == data->nCols
+void grad(double *w, double* gradOut, Data* data) {
+  memset(gradOut, 0, sizeof(double) * data->nCols);
+  for (int i = 0; i < data->nRows; ++i) {
+	  DataRow *thisRow = data->dataRows + i;
+		// calculate w^Tx
+		double innerProd = 0.0;
+    for (int j = 0; j < thisRow->nLength; ++j) {
+		  long idx = thisRow->elements[j].colIdx;
+			innerProd += w[idx] * thisRow->elements[j].value;
+		}
+		if (thisRow->output == -1) {
+		  double coef = -1.0 / (exp(innerProd) + 1.0);
+      for (int j = 0; j < thisRow->nLength; ++j) {
+			  long idx = thisRow->elements[j].colIdx;
+				gradOut[idx] += thisRow->elements[j].value * coef;
+			}
+		}
+		else { // thisRow->output == 1
+		  double coef = 1.0 - 1.0 / (exp(innerProd) + 1.0);
+			for (int j = 0; j < thisRow->nLength; ++j) {
+			  long idx = thisRow->elements[j].colIdx;
+				gradOut[idx] += thisRow->elements[j].value * coef;
+			}
+		}
+	}
 }
 
 // client side
@@ -216,11 +247,9 @@ void client(int clientId) {
 	Data data;
 	//printData(&data);
   collectData(&data);
+
 	rmData(&data);
 }
-
-
-
 
 int main(int argc, char** argv) {
   int rank, size;
@@ -241,6 +270,5 @@ int main(int argc, char** argv) {
 		client(rank);
 	}
 	MPI_Finalize();
-	
 	return 0;
 }
