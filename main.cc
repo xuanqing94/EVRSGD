@@ -7,6 +7,11 @@
 #define MAX_IDX_DIGITS 16
 #define MAX_VAL_DIGITS 16
 
+#define ROW_TAG 1
+#define ELE_TAG 2
+#define NCOL_TAG 3
+#define NROW_TAG 4
+
 typedef struct Elements_ {
 	long colIdx;
 	double value;
@@ -40,7 +45,6 @@ void loadData(const char* file, Data* data) {
   size_t count = fread(content, sizeof(char), fSize, fHandle);
   assert((count == fSize));
 
-  //data = (Data*)malloc(sizeof(Data));
   long nSample = 0;
   long nFeature = 0;
   unsigned long nElem = 0;
@@ -116,16 +120,106 @@ void rmData(Data* data) {
   free(data->dataRows);
 }
 
-// server side
-void server() {
-	//TODO
+// print
+void printData(Data* data) {
+  for (int i = 0; i < data->nRows; ++i) {
+	  DataRow *dataRow = data->dataRows + i;
+		printf("%d, length: %ld", dataRow->output, dataRow->nLength);
+	  for (int j = 0; j < dataRow->nLength; ++j) {
+		  printf("%ld:%lf ", (dataRow->elements[j]).colIdx, (dataRow->elements[j]).value);
+		}
+		printf("\n");
+	}
 }
 
+// from 0 to 1, 2, ..., nClients
+//XXX should we use random assignment or scatter?
+void distributeData(Data* data, int nClients) {
+  int kthRow = 0;
+	int nextReceiver = 0;
+	while (kthRow != data->nRows) {
+	  nextReceiver = rand() % nClients + 1;
+		DataRow *rowToSend = data->dataRows + kthRow;
+		// send dataRow basic infomation, excluding elements
+		if (MPI_Send(rowToSend, sizeof(DataRow), MPI_BYTE, 
+		  nextReceiver, ROW_TAG, MPI_COMM_WORLD) != MPI_SUCCESS) {
+			fprintf(stderr, "Fail to send data row\n");
+			exit(-1);
+	  }
+    // send elements in that datarow
+	  Element *elements = rowToSend->elements;
+	  if (MPI_Send(elements, sizeof(Element) * rowToSend->nLength, MPI_BYTE, 
+		  nextReceiver, ELE_TAG, MPI_COMM_WORLD) != MPI_SUCCESS) {
+			fprintf(stderr, "Fail to send elements\n");
+		  exit(-1);
+		}
+		kthRow++;
+  }
+	printf("Finished sending\n");
+	// broadcast end of data signal
+  DataRow endOfData;
+	endOfData.nLength = 0;
+	for (int i = 1; i <= nClients; ++i) {
+	  if (MPI_Send(&endOfData, sizeof(DataRow), MPI_BYTE, i, ROW_TAG, MPI_COMM_WORLD) != MPI_SUCCESS) {
+	    fprintf(stderr, "Fail to send end-of-data signal\n");
+		  exit(-1);
+	  }
+	}
+}
+
+void collectData(Data* data) {
+	DataRow *dataRow = (DataRow*)malloc(sizeof(DataRow) * 1);
+	Element *elementBuff = (Element*)malloc(sizeof(Element) * 1);
+	long rowCapacity = 1;
+	long rowCount = 0;
+	long elemCapacity = 1;
+	long elemCount = 0;
+	while (true) {
+	  if (rowCount == rowCapacity) {
+		  rowCapacity <<= 1;
+		  dataRow = (DataRow*)realloc(dataRow, sizeof(DataRow) * rowCapacity);
+		}
+		DataRow *rowToRecv = dataRow + rowCount;
+	  MPI_Recv(rowToRecv, sizeof(DataRow), MPI_BYTE, 0, ROW_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		if (rowToRecv->nLength == 0) {
+		  rowCount--;
+			break;
+		}
+		if (elemCount + rowToRecv->nLength >= elemCapacity) {
+		  elemCapacity += rowToRecv->nLength;
+			elemCapacity <<= 1;
+			elementBuff = (Element*)realloc(elementBuff, sizeof(Element) * elemCapacity);
+		}
+		Element *elemToRecv = elementBuff + elemCount;
+		MPI_Recv(elemToRecv, sizeof(Element) * rowToRecv->nLength, MPI_BYTE, 0, ELE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		rowCount++;
+	  elemCount += rowToRecv->nLength;
+	}
+	long elemIdx = 0;
+	for (int i = 0; i < rowCount; ++i) {
+	  dataRow[i].elements = elementBuff + elemIdx;
+		elemIdx += dataRow[i].nLength;
+	}
+	data->nRows = rowCount;
+	data->dataRows = dataRow;
+}
+
+// server side
+void server(Data* data, int nClients) {
+	//TODO
+	distributeData(data, nClients);
+}
 
 // client side
 void client(int clientId) {
 	//TODO
+	Data data;
+	//printData(&data);
+  collectData(&data);
+	rmData(&data);
 }
+
+
 
 
 int main(int argc, char** argv) {
@@ -135,13 +229,12 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-	printf("I am %d of %d\n", rank + 1, size);
   if (rank == 0) { // for server
 	  // load data
 		Data data;
-		loadData("../real-sim", &data);
+		loadData("../test_realsim", &data);
     printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
-		server();
+		server(&data, size - 1);
 		rmData(&data);
 	}
 	else { // for clients
