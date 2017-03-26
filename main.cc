@@ -204,12 +204,33 @@ void collectData(Data* data) {
 	data->nRows = rowCount;
 	data->dataRows = dataRow;
 }
-
 // server side
-void server(Data* data, int nClients) {
-	//TODO
+void server(Data* data, int nClients, double eta, double rho) {
 	distributeData(data, nClients);
-	
+	int d = data -> ncols;
+	double *bufferW = (double*)malloc(sizeof(double) * d * nClients);
+	double *z = (double*)malloc(sizeof(double) * d);
+	// initialize z,W
+	for (int i=0; i < d; i++ )
+		z[i]=0.0;
+	for (int i=0; i < d * nClients; i++)
+		bufferW=0.0;
+	double *sum_bufferW = (double*)malloc(sizeof(double)*d);
+	for (int i=0; i<d; i++)
+		sum_bufferW = 0.0;
+	while (){
+		double *wk = (double*)malloc(sizeof(double) * (d+1));
+		MPI_Recv(wk, d+1, MPI_DOUBLE, MPI_ANY_SOURCE , MPI_ANY_TAG , MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		int cur_k = (int) wk[d];	
+		for (int i=0; i <d; i++){
+			z[i]= (1-eta*rho*nClients)*z[i] + eta*rho*nClients*(wk[i]-bufferW[(cur_k-1)*d+i]+1/nClients*sum_bufferW[i]);
+			sum_bufferW[i] += wk[i]-bufferW[(cur_k-1)*d+i];
+			bufferW[(cur_k-1)*d+i]=wk[i];
+		}
+		MPI_Send(z, d, MPI_DOUBLE, k, MPI_ANY_TAG, MPI_COMM_WORLD);
+
+	}
+
 }
 
 // calculate the gradient, suppose the original problem is logistic regression
@@ -240,16 +261,30 @@ void grad(double *w, double* gradOut, Data* data) {
 		}
 	}
 }
-
 // client side
-void client(int clientId) {
-	//TODO
+void client(int clientId, double rho, double eta) {
 	Data data;
 	//printData(&data);
-  collectData(&data);
-
+  	collectData(&data);
+	double *wk = (double*)malloc(sizeof(double) * (d+1));
+	double *z = (double*)malloc(sizeof(double) * d);
+	double *gradwk = (double*)malloc(sizeof(double) * d);
+	for (int i=0; i<d; i++){
+		wk[i]=0.0;
+		z[i]=0.0;
+	}
+	while (){
+	MPI_Recv(z, d, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	grad(wk, gradwk, data);
+	for (int i=0; i<d; i++)
+		wk[i] = wk[i] - eta * (gradwk[i]+rho*(wk[i]-z[i]));
+	//gradient
+	wk[d]= (double) clientId;
+	MPI_Send(wk, d+1, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
+	}
 	rmData(&data);
 }
+
 
 int main(int argc, char** argv) {
   int rank, size;
