@@ -24,7 +24,7 @@ void exit_input_error(int line_num){
 	exit(1);
 }
 
-void parse_command_line(int argc, char **argv, char *input_file_name, char *test_file_name, double *eta, double *rho, int *method_flag){
+void parse_command_line(int argc, char **argv, char *input_file_name, char *test_file_name, double *eta, double *rho, int *method_flag, int rank){
 	int i;
 	for (i=1;i<argc;i++){
 		if (argv[i][0] != '-') break;
@@ -41,7 +41,7 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *test
 				*eta = atof(argv[i]);
 				break;
 			default :
-				if (mpi_get_rank()==0)
+				if (rank == 0)
 					fprintf(stderr, "unknown option: -%c\n", argv[i-1][1]);
 				exit_with_help();
 				break;
