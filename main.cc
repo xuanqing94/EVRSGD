@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <string.h>
+#include "command_line.h"
 
 #define MAX_TAG_DIGITS 16
 #define MAX_IDX_DIGITS 16
@@ -270,18 +272,18 @@ void functionVal(void* args) {
 // server side
 void server(Data* data, int nClients, double eta, double rho) {
 	distributeData(data, nClients);
-	int d = data -> ncols;
+	int d = data -> nCols;
 	double *bufferW = (double*)malloc(sizeof(double) * d * nClients);
 	double *z = (double*)malloc(sizeof(double) * d);
 	// initialize z,W
 	for (int i=0; i < d; i++ )
 		z[i]=0.0;
 	for (int i=0; i < d * nClients; i++)
-		bufferW=0.0;
+		bufferW[i]=0.0;
 	double *sum_bufferW = (double*)malloc(sizeof(double)*d);
 	for (int i=0; i<d; i++)
-		sum_bufferW = 0.0;
-	while (){
+		sum_bufferW[i] = 0.0;
+	while (1){
 		double *wk = (double*)malloc(sizeof(double) * (d+1));
 		MPI_Recv(wk, d+1, MPI_DOUBLE, MPI_ANY_SOURCE , MPI_ANY_TAG , MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		int cur_k = (int) wk[d];	
@@ -290,7 +292,7 @@ void server(Data* data, int nClients, double eta, double rho) {
 			sum_bufferW[i] += wk[i]-bufferW[(cur_k-1)*d+i];
 			bufferW[(cur_k-1)*d+i]=wk[i];
 		}
-		MPI_Send(z, d, MPI_DOUBLE, k, MPI_ANY_TAG, MPI_COMM_WORLD);
+		MPI_Send(z, d, MPI_DOUBLE, cur_k, MPI_ANY_TAG, MPI_COMM_WORLD);
 
 	}
 
@@ -330,6 +332,7 @@ void client(int clientId, double rho, double eta) {
 	Data data;
 	//printData(&data);
   	collectData(&data);
+	int d = (&data) -> nCols;
 	double *wk = (double*)malloc(sizeof(double) * (d+1));
 	double *z = (double*)malloc(sizeof(double) * d);
 	double *gradwk = (double*)malloc(sizeof(double) * d);
@@ -337,9 +340,9 @@ void client(int clientId, double rho, double eta) {
 		wk[i]=0.0;
 		z[i]=0.0;
 	}
-	while (){
+	while (1){
 	MPI_Recv(z, d, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	grad(wk, gradwk, data);
+	grad(wk, gradwk, &data);
 	for (int i=0; i<d; i++)
 		wk[i] = wk[i] - eta * (gradwk[i]+rho*(wk[i]-z[i]));
 	//gradient
@@ -352,8 +355,13 @@ void client(int clientId, double rho, double eta) {
 
 int main(int argc, char** argv) {
   int rank, size;
+  char input_file_name[1024];
+  char test_file_name[1024];
+  double eta;
+	double rho;
+	int *method_flag;
+	parse_command_line(argc, argv, input_file_name, test_file_name, eta, rho, method_flag, rank); 
 	MPI_Init(&argc, &argv);
-
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -379,13 +387,13 @@ int main(int argc, char** argv) {
 
 		pthread_t monitor_thread;
 		pthread_create(&monitor, NULL, (void*)(functionVal*)(void*), &arg);
-		server(&data, size - 1);
+		server(&data, size - 1, *rho, *eta);
 
 		pthread_join(monitor_thread, NULL);
 		rmData(&data);
 	}
 	else { // for clients
-		client(rank);
+		client(rank, *rho, *eta);
 	}
 	MPI_Finalize();
 	return 0;
