@@ -1,8 +1,11 @@
+#include <unistd.h>
 #include <math.h>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #define MAX_TAG_DIGITS 16
 #define MAX_IDX_DIGITS 16
@@ -204,6 +207,66 @@ void collectData(Data* data) {
 	data->nRows = rowCount;
 	data->dataRows = dataRow;
 }
+
+
+// struct for thread arguments
+typedef struct Arg_ {
+  Data *data;
+	double *z;
+	pthread_mutex_t *lock_z;
+	int interval;          // seconds every call
+  double eps;            // minimal error
+	bool *stop;            // should stop or not
+} Arg;
+
+// Calculate the loss function given z
+double functionVal_impl(Data* data, double* z) {
+  double loss = 0.0;
+	for (int i = 0; i < data->nRows; ++i) {
+	  DataRow *thisRow = data->dataRows + i;
+		double innerProd = 0.0;
+		// calculate w^Tx_i
+		for (int j = 0; j < thisRow->nLength; ++j) {
+		  long colIdx = thisRow->elements[j].colIdx;
+			innerProd += z[colIdx] * thisRow->elements[j].value;
+	  }
+		if (thisRow->output > 0) {
+      loss += log(1.0 + exp(-innerProd));
+		}
+		else {
+		  loss += log(1.0 + exp(innerProd));
+		}
+	}
+	return loss;
+}
+
+void functionVal(void* args) {
+  Arg *arg = args;
+	double *z_loc = (double*)calloc(sizeof(double) * arg->data->nCols);
+	
+	double last_error = functionVal_impl(arg->data, z_loc);
+	printf("Loss function: %lf\n", last_error);
+	while (true) {
+	  sleep(args->interval);
+		// acquire lock
+		pthread_mutex_lock(args->lock_z);
+    // copy z
+		memcpy(z_loc, z, sizeof(double) * arg->data->nCols);
+		// release lock
+		pthread_mutex_unlock(args->lock_z);
+		// calculate the new value
+    double this_error = functionVal_impl(arg->data, z_loc);
+    printf("Loss function: %lf\n", this_error);
+		if (this_error - last_error > -eps && this_error < last_error) {
+		  arg->stop = true;
+			break;
+		}
+		else {
+      this_error = last_error;
+		}
+	}
+}
+
 // server side
 void server(Data* data, int nClients, double eta, double rho) {
 	distributeData(data, nClients);
@@ -261,6 +324,7 @@ void grad(double *w, double* gradOut, Data* data) {
 		}
 	}
 }
+
 // client side
 void client(int clientId, double rho, double eta) {
 	Data data;
@@ -298,7 +362,26 @@ int main(int argc, char** argv) {
 		Data data;
 		loadData("../test_realsim", &data);
     printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
+    bool stop = false;
+		double eps = 1.0e-6;
+		interval = 1;
+    pthread_mutex_t lock_z;
+		pthread_mutex_init(&lock_z, NULL);
+    double *z = (double*)calloc(sizeof(double) * data->nCols);
+		// function arguments
+		Arg arg;
+		arg.data = data;
+		arg.z = z;
+		arg.lock_z = &lock_z;
+		arg.interval = interval;
+		arg.eps = eps;
+		arg.stop = &stop;
+
+		pthread_t monitor_thread;
+		pthread_create(&monitor, NULL, (void*)(functionVal*)(void*), &arg);
 		server(&data, size - 1);
+
+		pthread_join(monitor_thread, NULL);
 		rmData(&data);
 	}
 	else { // for clients
