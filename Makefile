@@ -1,7 +1,5 @@
 CXX=mpic++
-CC=mpicc
-GCXX=g++
-FLAGS=-O2
+FLAGS=-O2 -std=c++11
 
 evrsgd.out: main.o command_line.o
 	${CXX} main.o command_line.o -o evrsgd.out ${FLAGS}

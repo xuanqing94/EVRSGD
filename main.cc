@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <pthread.h>
-#include <stdatomic.h>
+#include <atomic>
 #include <string.h>
+
 #include "command_line.h"
 
 #define MAX_TAG_DIGITS 16
@@ -242,25 +243,25 @@ double functionVal_impl(Data* data, double* z) {
 	return loss;
 }
 
-void functionVal(void* args) {
-  Arg *arg = args;
-	double *z_loc = (double*)calloc(sizeof(double) * arg->data->nCols);
+void* functionVal(void* args) {
+  Arg *arg = (Arg*)args;
+	double *z_loc = (double*)calloc(arg->data->nCols, sizeof(double));
 	
 	double last_error = functionVal_impl(arg->data, z_loc);
 	printf("Loss function: %lf\n", last_error);
 	while (true) {
-	  sleep(args->interval);
+	  sleep(arg->interval);
 		// acquire lock
-		pthread_mutex_lock(args->lock_z);
+		pthread_mutex_lock(arg->lock_z);
     // copy z
-		memcpy(z_loc, z, sizeof(double) * arg->data->nCols);
+		memcpy(z_loc, arg->z, sizeof(double) * arg->data->nCols);
 		// release lock
-		pthread_mutex_unlock(args->lock_z);
+		pthread_mutex_unlock(arg->lock_z);
 		// calculate the new value
     double this_error = functionVal_impl(arg->data, z_loc);
     printf("Loss function: %lf\n", this_error);
-		if (this_error - last_error > -eps && this_error < last_error) {
-		  arg->stop = true;
+		if (this_error - last_error > -arg->eps && this_error < last_error) {
+		  *(arg->stop) = true;
 			break;
 		}
 		else {
@@ -273,24 +274,21 @@ void functionVal(void* args) {
 void server(Data* data, int nClients, double eta, double rho) {
 	distributeData(data, nClients);
 	int d = data -> nCols;
-	double *bufferW = (double*)malloc(sizeof(double) * d * nClients);
-	double *z = (double*)malloc(sizeof(double) * d);
-	// initialize z,W
-	for (int i=0; i < d; i++ )
-		z[i]=0.0;
-	for (int i=0; i < d * nClients; i++)
-		bufferW[i]=0.0;
-	double *sum_bufferW = (double*)malloc(sizeof(double)*d);
-	for (int i=0; i<d; i++)
-		sum_bufferW[i] = 0.0;
+	double *bufferW = (double*)calloc(d * nClients, sizeof(double));
+	double *z = (double*)calloc(d, sizeof(double));
+	double *sum_bufferW = (double*)calloc(d, sizeof(double));
+	double *wk = (double*)calloc(d + 1, sizeof(double));
 	while (1){
-		double *wk = (double*)malloc(sizeof(double) * (d+1));
-		MPI_Recv(wk, d+1, MPI_DOUBLE, MPI_ANY_SOURCE , MPI_ANY_TAG , MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-		int cur_k = (int) wk[d];	
-		for (int i=0; i <d; i++){
-			z[i]= (1-eta*rho*nClients)*z[i] + eta*rho*nClients*(wk[i]-bufferW[(cur_k-1)*d+i]+1/nClients*sum_bufferW[i]);
-			sum_bufferW[i] += wk[i]-bufferW[(cur_k-1)*d+i];
-			bufferW[(cur_k-1)*d+i]=wk[i];
+		MPI_Recv(wk, d + 1, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		int cur_k = wk[d];
+		for (int i = 0; i < d; i++){
+		  // update z
+			z[i] = (1 - eta * rho * nClients) * z[i] + eta * rho * nClients * (wk[i] - bufferW[(cur_k - 1) * d + i]
+			   + 1.0 / nClients * sum_bufferW[i]);
+		  // update summation of w
+			sum_bufferW[i] += wk[i] - bufferW[(cur_k-1) * d + i];
+			// update buffer W
+			bufferW[(cur_k - 1) * d + i] = wk[i];
 		}
 		MPI_Send(z, d, MPI_DOUBLE, cur_k, MPI_ANY_TAG, MPI_COMM_WORLD);
 
@@ -331,23 +329,19 @@ void grad(double *w, double* gradOut, Data* data) {
 void client(int clientId, double rho, double eta) {
 	Data data;
 	//printData(&data);
-  	collectData(&data);
+  collectData(&data);
 	int d = (&data) -> nCols;
-	double *wk = (double*)malloc(sizeof(double) * (d+1));
-	double *z = (double*)malloc(sizeof(double) * d);
+	double *wk = (double*)calloc(d + 1, sizeof(double));
+	double *z = (double*)calloc(d, sizeof(double));
 	double *gradwk = (double*)malloc(sizeof(double) * d);
-	for (int i=0; i<d; i++){
-		wk[i]=0.0;
-		z[i]=0.0;
-	}
 	while (1){
-	MPI_Recv(z, d, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	grad(wk, gradwk, &data);
-	for (int i=0; i<d; i++)
-		wk[i] = wk[i] - eta * (gradwk[i]+rho*(wk[i]-z[i]));
-	//gradient
-	wk[d]= (double) clientId;
-	MPI_Send(wk, d+1, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
+	  grad(wk, gradwk, &data);
+	  for (int i=0; i<d; i++)
+		  wk[i] = wk[i] - eta * (gradwk[i] + rho * (wk[i] - z[i]));
+ 	  // send client ID to server
+		wk[d]= (double) clientId;
+	  MPI_Send(wk, d + 1, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
+	  MPI_Recv(z, d, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 	rmData(&data);
 }
@@ -360,7 +354,7 @@ int main(int argc, char** argv) {
   double eta;
 	double rho;
 	int *method_flag;
-	parse_command_line(argc, argv, input_file_name, test_file_name, eta, rho, method_flag, rank); 
+	parse_command_line(argc, argv, input_file_name, test_file_name, &eta, &rho, method_flag, rank); 
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -372,13 +366,13 @@ int main(int argc, char** argv) {
     printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
     bool stop = false;
 		double eps = 1.0e-6;
-		interval = 1;
+		int interval = 1;
     pthread_mutex_t lock_z;
 		pthread_mutex_init(&lock_z, NULL);
-    double *z = (double*)calloc(sizeof(double) * data->nCols);
+    double *z = (double*)calloc(data.nCols, sizeof(double));
 		// function arguments
 		Arg arg;
-		arg.data = data;
+		arg.data = &data;
 		arg.z = z;
 		arg.lock_z = &lock_z;
 		arg.interval = interval;
@@ -386,14 +380,14 @@ int main(int argc, char** argv) {
 		arg.stop = &stop;
 
 		pthread_t monitor_thread;
-		pthread_create(&monitor, NULL, (void*)(functionVal*)(void*), &arg);
-		server(&data, size - 1, *rho, *eta);
+		pthread_create(&monitor_thread, NULL, &functionVal, &arg);
+		server(&data, size - 1, rho, eta);
 
 		pthread_join(monitor_thread, NULL);
 		rmData(&data);
 	}
 	else { // for clients
-		client(rank, *rho, *eta);
+		client(rank, rho, eta);
 	}
 	MPI_Finalize();
 	return 0;
