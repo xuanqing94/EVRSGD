@@ -48,7 +48,7 @@ void distributeData(Data* data, int nClients) {
   }
   // broadcast end of data signal
   DataRow endOfData;
-  endOfData.nLength = 0;
+  endOfData.nLength = -1;
   for (int i = 1; i <= nClients; ++i) {
     if (MPI_Send(&endOfData, sizeof(DataRow), MPI_BYTE, i, ROW_TAG, MPI_COMM_WORLD) != MPI_SUCCESS) {
       fprintf(stderr, "Fail to send end-of-data signal\n");
@@ -73,7 +73,7 @@ void collectData(Data* data) {
     }
     DataRow *rowToRecv = dataRow + rowCount;
     MPI_Recv(rowToRecv, sizeof(DataRow), MPI_BYTE, 0, ROW_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    if (rowToRecv->nLength == 0) {
+    if (rowToRecv->nLength == -1) {
       break;
     }
     if (elemCount + rowToRecv->nLength >= elemCapacity) {
@@ -243,7 +243,6 @@ int main(int argc, char** argv) {
   double eps = 1.0e-5;
   int method_flag;
   parse_command_line(argc, argv, input_file_name, test_file_name, &eta, &rho, &method_flag, &eps, rank); 
-  
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
