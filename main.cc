@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "command_line.h"
+#include "loader.h"
 
 #define MAX_TAG_DIGITS 16
 #define MAX_IDX_DIGITS 16
@@ -18,132 +19,15 @@
 #define ELE_TAG 2
 #define NCOL_TAG 3
 #define NROW_TAG 4
-
-typedef struct Elements_ {
-	long colIdx;       // column index of that value
-	double value;      // value in that element
-} Element;
-
-typedef struct DataRow_ {
-	int output;        // y[i]
-	long nLength;      // nnz in that row
-	Element *elements; // data
-} DataRow;
-
-typedef struct Data_ {
-	long nCols;        // number of columns
-	long nRows;        // number of rows
-	DataRow *dataRows; // data
-} Data;
-
-// load data from file, make sure data = NULL
-void loadData(const char* file, Data* data) {
-  FILE *fHandle = fopen(file, "r");
-  if (fHandle == NULL) {
-    fprintf(stderr, "Fail to open file: %s\n", file);
-    data = NULL;
-    return;
-  }
-  // read whole file, then parse it
-  fseek(fHandle, 0, SEEK_END);
-  unsigned long fSize = ftell(fHandle);
-  fseek(fHandle, 0, SEEK_SET);
-  char *content = (char*)malloc(fSize * sizeof(char));
-  size_t count = fread(content, sizeof(char), fSize, fHandle);
-  assert((count == fSize));
-
-  long nSample = 0;
-  long nFeature = 0;
-  unsigned long nElem = 0;
-  DataRow *dataRow = (DataRow*)malloc(sizeof(DataRow) * 1);
-  Element *elemBuffer = (Element*)malloc(sizeof(Element) * 1); // we estimate #elem by fSize / 16.
-  long rowBufferSize = 1; //1024
-  long elemBufferSize = 1; // fSize >> 4
-  int firstOutput = 0;
-  for (unsigned long i = 0; i < fSize; ++i) {
-    // allocate one row
-    if (nSample == rowBufferSize) {
-      // enlarge by 2 times
-      rowBufferSize <<= 1;
-      dataRow = (DataRow*)realloc(dataRow, sizeof(DataRow) * rowBufferSize);
-    }
-    DataRow *thisRow = dataRow + nSample;
-    nSample++;
-    // read class 
-    char tag[MAX_TAG_DIGITS + 1] = {0};
-    for(int tag_idx = 0; content[i] != ' ' && tag_idx < MAX_TAG_DIGITS; ++i, ++tag_idx) {
-      tag[tag_idx] = content[i];
-    }
-    if (firstOutput == 0) {
-      thisRow->output = 1;
-      firstOutput = atoi(tag);
-    }
-    else {
-      if (atoi(tag) == firstOutput) thisRow->output = 1;
-      else thisRow->output = -1;
-    }
-    while (content[i] == ' ') i++;
-    thisRow->nLength = 0;
-    // read elements
-    for(; content[i] != '\n';) {
-        if (nElem == elemBufferSize) {
-          elemBufferSize <<= 1;
-          elemBuffer = (Element*)realloc(elemBuffer, sizeof(Element) * elemBufferSize);
-        }
-        Element *thisElem = elemBuffer + nElem;
-        char indexStr[MAX_IDX_DIGITS + 1] = {0};
-        char valStr[MAX_VAL_DIGITS + 1] = {0};
-        for (int idx = 0; content[i] != ':'; ++i, ++idx) {
-          indexStr[idx] = content[i];
-        }
-        i += 1;
-        for (int idx = 0; content[i] != ' '; ++i, ++idx) {
-          valStr[idx] = content[i];
-        }
-        while (content[i] == ' ') i++;
-        thisElem->colIdx = atoi(indexStr) - 1;
-        if (thisElem->colIdx + 1 > nFeature) 
-          nFeature = thisElem->colIdx + 1;
-        thisElem->value = atof(valStr);
-        nElem += 1;
-        thisRow->nLength += 1;
-    }
-  }
-  // link elemBuffer with dataRow
-  for (int i = 0; i < nSample; ++i) {
-    dataRow[i].elements = elemBuffer;
-    elemBuffer += dataRow[i].nLength;
-  }
-  data->dataRows = dataRow;
-  data->nRows = nSample;
-  data->nCols = nFeature;
-  free(content);
-  fclose(fHandle);
-}
-
-// clean memory
-void rmData(Data* data) {
-  free(data->dataRows->elements);
-  free(data->dataRows);
-}
-
-// print
-void printData(Data* data) {
-  for (int i = 0; i < data->nRows; ++i) {
-	  DataRow *dataRow = data->dataRows + i;
-		printf("%d, length: %ld", dataRow->output, dataRow->nLength);
-	  for (int j = 0; j < dataRow->nLength; ++j) {
-		  printf("%ld:%lf ", (dataRow->elements[j]).colIdx, (dataRow->elements[j]).value);
-		}
-		printf("\n");
-	}
-}
+#define W_TAG 5
+#define Z_TAG  6
 
 // from 0 to 1, 2, ..., nClients
 //XXX should we use random assignment or scatter?
 void distributeData(Data* data, int nClients) {
   int kthRow = 0;
 	int nextReceiver = 0;
+	MPI_Bcast(&data->nCols, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	while (kthRow != data->nRows) {
 	  nextReceiver = rand() % nClients + 1;
 		DataRow *rowToSend = data->dataRows + kthRow;
@@ -162,7 +46,6 @@ void distributeData(Data* data, int nClients) {
 		}
 		kthRow++;
   }
-	printf("Finished sending\n");
 	// broadcast end of data signal
   DataRow endOfData;
 	endOfData.nLength = 0;
@@ -179,8 +62,10 @@ void collectData(Data* data) {
 	Element *elementBuff = (Element*)malloc(sizeof(Element) * 1);
 	long rowCapacity = 1;
 	long rowCount = 0;
+	long colCount = 0;
 	long elemCapacity = 1;
 	long elemCount = 0;
+	MPI_Bcast(&colCount, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	while (true) {
 	  if (rowCount == rowCapacity) {
 		  rowCapacity <<= 1;
@@ -189,7 +74,6 @@ void collectData(Data* data) {
 		DataRow *rowToRecv = dataRow + rowCount;
 	  MPI_Recv(rowToRecv, sizeof(DataRow), MPI_BYTE, 0, ROW_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		if (rowToRecv->nLength == 0) {
-		  rowCount--;
 			break;
 		}
 		if (elemCount + rowToRecv->nLength >= elemCapacity) {
@@ -208,6 +92,7 @@ void collectData(Data* data) {
 		elemIdx += dataRow[i].nLength;
 	}
 	data->nRows = rowCount;
+	data->nCols = colCount;
 	data->dataRows = dataRow;
 }
 
@@ -219,7 +104,7 @@ typedef struct Arg_ {
 	pthread_mutex_t *lock_z;
 	int interval;          // seconds every call
   double eps;            // minimal error
-	bool *stop;            // should stop or not
+	std::atomic<bool> *stop;            // should stop or not
 } Arg;
 
 // Calculate the loss function given z
@@ -261,7 +146,8 @@ void* functionVal(void* args) {
     double this_error = functionVal_impl(arg->data, z_loc);
     printf("Loss function: %lf\n", this_error);
 		if (this_error - last_error > -arg->eps && this_error < last_error) {
-		  *(arg->stop) = true;
+		  printf("Desired error attained, send stop signal\n");
+			arg->stop->store(true);
 			break;
 		}
 		else {
@@ -273,34 +159,35 @@ void* functionVal(void* args) {
 // server side
 void server(Data* data, int nClients, double eta, double rho, Arg* arg) {
 	distributeData(data, nClients);
+	printf("Data sent by server: %ld rows, %ld columns\n", data->nRows, data->nCols);
 	int d = data -> nCols;
 	double *bufferW = (double*)calloc(d * nClients, sizeof(double));
-	double *z = (double*)calloc(d, sizeof(double));
 	double *sum_bufferW = (double*)calloc(d, sizeof(double));
 	double *wk = (double*)calloc(d + 1, sizeof(double));
-	while (!arg->stop){
-		MPI_Recv(wk, d + 1, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	while (!arg->stop->load()){
+		MPI_Recv(wk, d + 1, MPI_DOUBLE, MPI_ANY_SOURCE, W_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		int cur_k = wk[d];
     pthread_mutex_lock(arg->lock_z);
 		for (int i = 0; i < d; i++){
 		  // update z
-			z[i] = (1 - eta * rho * nClients) * z[i] + eta * rho * nClients * (wk[i] - bufferW[(cur_k - 1) * d + i]
-			   + 1.0 / nClients * sum_bufferW[i]);
+			arg->z[i] = (1 - eta * rho * nClients) * arg->z[i] + eta * rho * nClients * 
+			  (wk[i] - bufferW[(cur_k - 1) * d + i] + 1.0 / nClients * sum_bufferW[i]);
 		  // update summation of w
 			sum_bufferW[i] += wk[i] - bufferW[(cur_k-1) * d + i];
 			// update buffer W
 			bufferW[(cur_k - 1) * d + i] = wk[i];
 		}
 		pthread_mutex_unlock(arg->lock_z);
-		MPI_Send(z, d, MPI_DOUBLE, cur_k, MPI_ANY_TAG, MPI_COMM_WORLD);
+		MPI_Send(arg->z, d, MPI_DOUBLE, cur_k, Z_TAG, MPI_COMM_WORLD);
 	}
+	printf("Server stopped.");
 }
 
 // calculate the gradient, suppose the original problem is logistic regression
 // make sure len(w) == len(gradOut) == data->nCols
 void grad(double *w, double* gradOut, Data* data) {
   memset(gradOut, 0, sizeof(double) * data->nCols);
-  for (int i = 0; i < data->nRows; ++i) {
+	for (int i = 0; i < data->nRows; ++i) {
 	  DataRow *thisRow = data->dataRows + i;
 		// calculate w^Tx
 		double innerProd = 0.0;
@@ -309,14 +196,14 @@ void grad(double *w, double* gradOut, Data* data) {
 			innerProd += w[idx] * thisRow->elements[j].value;
 		}
 		if (thisRow->output == -1) {
-		  double coef = -1.0 / (exp(innerProd) + 1.0);
+		  double coef = 1.0 - 1.0 / (exp(innerProd) + 1.0);
       for (int j = 0; j < thisRow->nLength; ++j) {
 			  long idx = thisRow->elements[j].colIdx;
 				gradOut[idx] += thisRow->elements[j].value * coef;
 			}
 		}
 		else { // thisRow->output == 1
-		  double coef = 1.0 - 1.0 / (exp(innerProd) + 1.0);
+		  double coef = -1.0 / (exp(innerProd) + 1.0);
 			for (int j = 0; j < thisRow->nLength; ++j) {
 			  long idx = thisRow->elements[j].colIdx;
 				gradOut[idx] += thisRow->elements[j].value * coef;
@@ -328,8 +215,8 @@ void grad(double *w, double* gradOut, Data* data) {
 // client side
 void client(int clientId, double rho, double eta) {
 	Data data;
-	//printData(&data);
   collectData(&data);
+  printf("Data received by client: %ld rows, %ld columns\n", data.nRows, data.nCols);
 	int d = (&data) -> nCols;
 	double *wk = (double*)calloc(d + 1, sizeof(double));
 	double *z = (double*)calloc(d, sizeof(double));
@@ -340,8 +227,8 @@ void client(int clientId, double rho, double eta) {
 		  wk[i] = wk[i] - eta * (gradwk[i] + rho * (wk[i] - z[i]));
  	  // send client ID to server
 		wk[d]= (double) clientId;
-	  MPI_Send(wk, d + 1, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD);
-	  MPI_Recv(z, d, MPI_DOUBLE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	  MPI_Send(wk, d + 1, MPI_DOUBLE, 0, W_TAG, MPI_COMM_WORLD);
+	  MPI_Recv(z, d, MPI_DOUBLE, 0, Z_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 	rmData(&data);
 }
@@ -349,12 +236,14 @@ void client(int clientId, double rho, double eta) {
 
 int main(int argc, char** argv) {
   int rank, size;
-  char input_file_name[1024];
-  char test_file_name[1024];
+  char input_file_name[1024] = {0};
+  char test_file_name[1024] = {0};
   double eta;
 	double rho;
-	int *method_flag;
-	parse_command_line(argc, argv, input_file_name, test_file_name, &eta, &rho, method_flag, rank); 
+	double eps = 1.0e-5;
+	int method_flag;
+	parse_command_line(argc, argv, input_file_name, test_file_name, &eta, &rho, &method_flag, &eps, rank); 
+	
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -362,10 +251,10 @@ int main(int argc, char** argv) {
   if (rank == 0) { // for server
 	  // load data
 		Data data;
-		loadData("../test_realsim", &data);
-    printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
-    bool stop = false;
-		double eps = 1.0e-6;
+		loadData(input_file_name, &data);
+		printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
+    
+		std::atomic<bool> stop(false);
 		int interval = 1;
     pthread_mutex_t lock_z;
 		pthread_mutex_init(&lock_z, NULL);
