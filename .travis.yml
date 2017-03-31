@@ -1,8 +1,8 @@
 language: cpp
 before_install:
+  - sudo apt-get -qq update
 	- sudo apt-get install -y mpich
-  - test -n $(CC) && unset CC
-  - test -n $(CXX) && unset CXX
+  - test -n $CXX && unset CXX
 install: true
 script: make
-
+compiler: g++
