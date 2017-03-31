@@ -50,27 +50,27 @@ void loadData(const char* file, Data* data) {
     thisRow->nLength = 0;
     // read elements
     for(; content[i] != '\n';) {
-        if (nElem == elemBufferSize) {
-          elemBufferSize <<= 1;
-          elemBuffer = (Element*)realloc(elemBuffer, sizeof(Element) * elemBufferSize);
-        }
-        Element *thisElem = elemBuffer + nElem;
-        char indexStr[MAX_IDX_DIGITS + 1] = {0};
-        char valStr[MAX_VAL_DIGITS + 1] = {0};
-        for (int idx = 0; content[i] != ':'; ++i, ++idx) {
-          indexStr[idx] = content[i];
-        }
-        i += 1;
-        for (int idx = 0; content[i] != ' '; ++i, ++idx) {
-          valStr[idx] = content[i];
-        }
-        while (content[i] == ' ') i++;
-        thisElem->colIdx = atoi(indexStr) - 1;
-        if (thisElem->colIdx + 1 > nFeature) 
-          nFeature = thisElem->colIdx + 1;
-        thisElem->value = atof(valStr);
-        nElem += 1;
-        thisRow->nLength += 1;
+      if (nElem == elemBufferSize) {
+	    elemBufferSize <<= 1;
+	    elemBuffer = (Element*)realloc(elemBuffer, sizeof(Element) * elemBufferSize);
+    }
+    Element *thisElem = elemBuffer + nElem;
+    char indexStr[MAX_IDX_DIGITS + 1] = {0};
+    char valStr[MAX_VAL_DIGITS + 1] = {0};
+    for (int idx = 0; content[i] != ':'; ++i, ++idx) {
+ 	    indexStr[idx] = content[i];
+    }
+    i += 1;
+    for (int idx = 0; content[i] != ' '; ++i, ++idx) {
+      valStr[idx] = content[i];
+    }
+    while (content[i] == ' ') i++;
+      thisElem->colIdx = atoi(indexStr) - 1;
+      if (thisElem->colIdx + 1 > nFeature) 
+	    nFeature = thisElem->colIdx + 1;
+      thisElem->value = atof(valStr);
+      nElem += 1;
+      thisRow->nLength += 1;
     }
   }
   // link elemBuffer with dataRow
@@ -94,17 +94,17 @@ void rmData(Data* data) {
 // print
 void printData(Data* data, int headN) {
   if (headN == -1) headN = data->nRows;
-	if (headN < 0 || headN > data->nRows) {
-	  fprintf(stderr, "Invalid headN parameter: %d\n", headN);
-		exit(-1);
-	}
+ if (headN < 0 || headN > data->nRows) {
+   fprintf(stderr, "Invalid headN parameter: %d\n", headN);
+  exit(-1);
+ }
   for (int i = 0; i < headN; ++i) {
-	  DataRow *dataRow = data->dataRows + i;
-		printf("%d, length: %ld\n", dataRow->output, dataRow->nLength);
-	  for (int j = 0; j < dataRow->nLength; ++j) {
-		  printf("%ld:%lf ", (dataRow->elements[j]).colIdx, (dataRow->elements[j]).value);
-		}
-		printf("\n");
-	}
+   DataRow *dataRow = data->dataRows + i;
+  printf("%d, length: %ld\n", dataRow->output, dataRow->nLength);
+   for (int j = 0; j < dataRow->nLength; ++j) {
+    printf("%ld:%lf ", (dataRow->elements[j]).colIdx, (dataRow->elements[j]).value);
+  }
+  printf("\n");
+ }
 }
 
