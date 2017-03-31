@@ -1,7 +1,7 @@
 language: cpp
 before_install:
   - sudo apt-get -qq update
-	- sudo apt-get install -y openmpi
+  - sudo apt-get install -y openmpi
   - test -n $CXX && unset CXX
 install: true
 script: make
