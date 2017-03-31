@@ -1,5 +1,7 @@
 before_install:
   - test -n $(CC) && unset CC
+  - test -n $(CXX) && unset CXX
+	- sudo apt-get install -y mpich
 install: true
 script: make
 
