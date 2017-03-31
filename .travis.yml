@@ -1,3 +1,4 @@
+language: cpp
 before_install:
 	- sudo apt-get install -y mpich
   - test -n $(CC) && unset CC
