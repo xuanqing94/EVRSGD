@@ -271,16 +271,17 @@ void* functionVal(void* args) {
 }
 
 // server side
-void server(Data* data, int nClients, double eta, double rho) {
+void server(Data* data, int nClients, double eta, double rho, Arg* arg) {
 	distributeData(data, nClients);
 	int d = data -> nCols;
 	double *bufferW = (double*)calloc(d * nClients, sizeof(double));
 	double *z = (double*)calloc(d, sizeof(double));
 	double *sum_bufferW = (double*)calloc(d, sizeof(double));
 	double *wk = (double*)calloc(d + 1, sizeof(double));
-	while (1){
+	while (!arg->stop){
 		MPI_Recv(wk, d + 1, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		int cur_k = wk[d];
+    pthread_mutex_lock(arg->lock_z);
 		for (int i = 0; i < d; i++){
 		  // update z
 			z[i] = (1 - eta * rho * nClients) * z[i] + eta * rho * nClients * (wk[i] - bufferW[(cur_k - 1) * d + i]
@@ -290,10 +291,9 @@ void server(Data* data, int nClients, double eta, double rho) {
 			// update buffer W
 			bufferW[(cur_k - 1) * d + i] = wk[i];
 		}
+		pthread_mutex_unlock(arg->lock_z);
 		MPI_Send(z, d, MPI_DOUBLE, cur_k, MPI_ANY_TAG, MPI_COMM_WORLD);
-
 	}
-
 }
 
 // calculate the gradient, suppose the original problem is logistic regression
@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
 
 		pthread_t monitor_thread;
 		pthread_create(&monitor_thread, NULL, &functionVal, &arg);
-		server(&data, size - 1, rho, eta);
+		server(&data, size - 1, rho, eta, &arg);
 
 		pthread_join(monitor_thread, NULL);
 		rmData(&data);
