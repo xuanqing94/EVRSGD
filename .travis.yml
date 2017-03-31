@@ -1,0 +1,5 @@
+before_install:
+  - test -n $(CC) && unset CC
+install: true
+script: make
+
