@@ -184,7 +184,6 @@ void server_evrsgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
 }
 
 // server side for EASGD
-//TODO implement it, we don't need bufferW anymore, as well as cur_k.
 void server_easgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
   distributeData(data, nClients);
   printf("Data sent by server: %ld rows, %ld columns\n", data->nRows, data->nCols);
@@ -198,15 +197,11 @@ void server_easgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
     pthread_mutex_lock(arg->lock_z);
     for (int i = 0; i < d; i++){
       // update summation of w
-
-			// update z
-			
-      arg->z[i] = (1 - eta * rho * nClients) * arg->z[i] + eta * rho * nClients * 
-        (wk[i] - bufferW[(cur_k - 1) * d + i] + 1.0 / nClients * sum_bufferW[i]);
-      // update summation of w
       sum_bufferW[i] += wk[i] - bufferW[(cur_k-1) * d + i];
+			// update z
+      arg->z[i] = (1 - eta * rho * nClients) * arg->z[i] + eta * rho * sum_bufferW[i];
       // update buffer W
-      bufferW[(cur_k - 1) * d + i] = wk[i];
+			bufferW[(cur_k - 1) * d + i] = wk[i];
     }
     pthread_mutex_unlock(arg->lock_z);
     MPI_Send(arg->z, d, MPI_DOUBLE, cur_k, Z_TAG, MPI_COMM_WORLD);
@@ -306,8 +301,18 @@ int main(int argc, char** argv) {
 
     pthread_t monitor_thread;
     pthread_create(&monitor_thread, NULL, &functionVal, &arg);
-    server_evrsgd(&data, size - 1, rho, eta, &arg);
-
+    if (method_flag == 0) {
+      printf("Running EVRSGD method");
+      server_evrsgd(&data, size - 1, rho, eta, &arg);
+    }
+		else if (method_flag == 1) {
+		  printf("Running EASGD method");
+		  server_easgd(&data, size - 1, rho, eta, &arg);
+		}
+		else {
+		  fprintf(stderr, "Invalid method flag\n");
+			exit(-1);
+		}
     pthread_join(monitor_thread, NULL);
     rmData(&data);
   }
