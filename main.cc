@@ -131,10 +131,10 @@ double functionVal_impl(Data* data, double* z) {
 void* functionVal(void* args) {
   Arg *arg = (Arg*)args;
   double *z_loc = (double*)calloc(arg->data->nCols, sizeof(double));
-  
   double last_error = functionVal_impl(arg->data, z_loc);
   printf("Loss function: %lf\n", last_error);
-  while (true) {
+  int counter = 0;
+	while (true) {
     sleep(arg->interval);
     // acquire lock
     pthread_mutex_lock(arg->lock_z);
@@ -144,7 +144,7 @@ void* functionVal(void* args) {
     pthread_mutex_unlock(arg->lock_z);
     // calculate the new value
     double this_error = functionVal_impl(arg->data, z_loc);
-    printf("Loss function: %lf\n", this_error);
+    printf("Time: %d, Loss function: %lf\n", ++counter, this_error);
     if (this_error - last_error > -arg->eps && this_error < last_error) {
       printf("Desired error attained, send stop signal\n");
       arg->stop->store(true);
@@ -156,8 +156,8 @@ void* functionVal(void* args) {
   }
 }
 
-// server side
-void server(Data* data, int nClients, double eta, double rho, Arg* arg) {
+// server side for EVRSGD
+void server_evrsgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
   distributeData(data, nClients);
   printf("Data sent by server: %ld rows, %ld columns\n", data->nRows, data->nCols);
   int d = data -> nCols;
@@ -170,6 +170,37 @@ void server(Data* data, int nClients, double eta, double rho, Arg* arg) {
     pthread_mutex_lock(arg->lock_z);
     for (int i = 0; i < d; i++){
       // update z
+      arg->z[i] = (1 - eta * rho * nClients) * arg->z[i] + eta * rho * nClients * 
+        (wk[i] - bufferW[(cur_k - 1) * d + i] + 1.0 / nClients * sum_bufferW[i]);
+      // update summation of w
+      sum_bufferW[i] += wk[i] - bufferW[(cur_k-1) * d + i];
+      // update buffer W
+      bufferW[(cur_k - 1) * d + i] = wk[i];
+    }
+    pthread_mutex_unlock(arg->lock_z);
+    MPI_Send(arg->z, d, MPI_DOUBLE, cur_k, Z_TAG, MPI_COMM_WORLD);
+  }
+  printf("Server stopped.");
+}
+
+// server side for EASGD
+//TODO implement it, we don't need bufferW anymore, as well as cur_k.
+void server_easgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
+  distributeData(data, nClients);
+  printf("Data sent by server: %ld rows, %ld columns\n", data->nRows, data->nCols);
+  int d = data -> nCols;
+  double *bufferW = (double*)calloc(d * nClients, sizeof(double));
+  double *sum_bufferW = (double*)calloc(d, sizeof(double));
+  double *wk = (double*)calloc(d + 1, sizeof(double));
+  while (!arg->stop->load()){
+    MPI_Recv(wk, d + 1, MPI_DOUBLE, MPI_ANY_SOURCE, W_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    int cur_k = wk[d];
+    pthread_mutex_lock(arg->lock_z);
+    for (int i = 0; i < d; i++){
+      // update summation of w
+
+			// update z
+			
       arg->z[i] = (1 - eta * rho * nClients) * arg->z[i] + eta * rho * nClients * 
         (wk[i] - bufferW[(cur_k - 1) * d + i] + 1.0 / nClients * sum_bufferW[i]);
       // update summation of w
@@ -217,15 +248,21 @@ void client(int clientId, double rho, double eta) {
   Data data;
   collectData(&data);
   printf("Data received by client: %ld rows, %ld columns\n", data.nRows, data.nCols);
-  int d = (&data) -> nCols;
+  int d = data.nCols;
   double *wk = (double*)calloc(d + 1, sizeof(double));
   double *z = (double*)calloc(d, sizeof(double));
   double *gradwk = (double*)malloc(sizeof(double) * d);
-  while (1){
-    grad(wk, gradwk, &data);
-    for (int i=0; i<d; i++)
-      wk[i] = wk[i] - eta * (gradwk[i] + rho * (wk[i] - z[i]));
-     // send client ID to server
+  time_t now;
+	srand(clientId + (unsigned int)time(&now)); // set random seed
+	while (1){
+	  // choose number of iterations randomly
+		int n_iter = 1; //rand() % (max_iter - min_iter) + min_iter;
+		for (int inner = 0; inner < n_iter; ++inner) {
+      grad(wk, gradwk, &data);
+      for (int i=0; i<d; i++)
+        wk[i] = wk[i] - eta * (gradwk[i] + rho * (wk[i] - z[i]));
+	  }
+    // send client ID to server
     wk[d]= (double) clientId;
     MPI_Send(wk, d + 1, MPI_DOUBLE, 0, W_TAG, MPI_COMM_WORLD);
     MPI_Recv(z, d, MPI_DOUBLE, 0, Z_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -269,7 +306,7 @@ int main(int argc, char** argv) {
 
     pthread_t monitor_thread;
     pthread_create(&monitor_thread, NULL, &functionVal, &arg);
-    server(&data, size - 1, rho, eta, &arg);
+    server_evrsgd(&data, size - 1, rho, eta, &arg);
 
     pthread_join(monitor_thread, NULL);
     rmData(&data);
