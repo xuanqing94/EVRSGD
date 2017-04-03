@@ -408,7 +408,7 @@ void client_dpsgd(int clientId, double rho, double eta) {
 		}
 		// send client ID to server
 		gradwk[d]= (double) clientId;
-		MPI_Send(gradwk, d + 1, MPI_DOUBLE, 0, W_TAG, MPI_COMM_WORLD);
+		MPI_Send(gradwk, d + 1, MPI_DOUBLE, 0, GRADW_TAG, MPI_COMM_WORLD);
 		MPI_Recv(z, d, MPI_DOUBLE, 0, Z_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 	rmData(&data);
