@@ -22,7 +22,9 @@
 #define W_TAG 5
 #define Z_TAG  6
 #define GRADW_TAG 7
+
 #define max(a,b) ((a) > (b)? (a):(b))
+
 // from 0 to 1, 2, ..., nClients
 //XXX should we use random assignment or scatter?
 void distributeData(Data* data, int nClients) {
@@ -157,6 +159,35 @@ void* functionVal(void* args) {
 	}
 }
 
+// calculate the gradient, suppose the original problem is logistic regression
+// make sure len(w) == len(gradOut) == data->nCols
+void grad(double *w, double* gradOut, Data* data) {
+	memset(gradOut, 0, sizeof(double) * data->nCols);
+	for (int i = 0; i < data->nRows; ++i) {
+		DataRow *thisRow = data->dataRows + i;
+		// calculate w^Tx
+		double innerProd = 0.0;
+		for (int j = 0; j < thisRow->nLength; ++j) {
+			long idx = thisRow->elements[j].colIdx;
+			innerProd += w[idx] * thisRow->elements[j].value;
+		}
+		if (thisRow->output == -1) {
+			double coef = 1.0 - 1.0 / (exp(innerProd) + 1.0);
+			for (int j = 0; j < thisRow->nLength; ++j) {
+				long idx = thisRow->elements[j].colIdx;
+				gradOut[idx] += thisRow->elements[j].value * coef;
+			}
+		}
+		else { // thisRow->output == 1
+			double coef = -1.0 / (exp(innerProd) + 1.0);
+			for (int j = 0; j < thisRow->nLength; ++j) {
+				long idx = thisRow->elements[j].colIdx;
+				gradOut[idx] += thisRow->elements[j].value * coef;
+			}
+		}
+	}
+}
+
 // server side for EVRSGD
 void server_evrsgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
 	distributeData(data, nClients);
@@ -182,6 +213,36 @@ void server_evrsgd(Data* data, int nClients, double eta, double rho, Arg* arg) {
 		MPI_Send(arg->z, d, MPI_DOUBLE, cur_k, Z_TAG, MPI_COMM_WORLD);
 	}
 	printf("Server stopped.");
+}
+
+// client evrsgd side
+void client_evrsgd(int clientId, double rho, double eta, double delta) {
+	Data data;
+	collectData(&data);
+	printf("Data received by client: %ld rows, %ld columns\n", data.nRows, data.nCols);
+	int d = data.nCols;
+	double *wk = (double*)calloc(d + 1, sizeof(double));
+	double *z = (double*)calloc(d, sizeof(double));
+	double *gradwk = (double*)malloc(sizeof(double) * d);
+	double *v = (double*)calloc(d, sizeof(double));
+	time_t now;
+	srand(clientId + (unsigned int)time(&now)); // set random seed
+	while (1){
+		// choose number of iterations randomly
+		int n_iter = 1; //rand() % (max_iter - min_iter) + min_iter;
+		for (int inner = 0; inner < n_iter; ++inner) {
+			grad(wk, gradwk, &data);
+			for (int i=0; i<d; i++){
+				v[i] = delta * v[i] - eta *gradwk[i];
+				wk[i] = wk[i] + v[i] - eta * rho * (wk[i] - z[i]);
+			}
+		}
+		// send client ID to server
+		wk[d]= (double) clientId;
+		MPI_Send(wk, d + 1, MPI_DOUBLE, 0, W_TAG, MPI_COMM_WORLD);
+		MPI_Recv(z, d, MPI_DOUBLE, 0, Z_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	}
+	rmData(&data);
 }
 
 // server side for EASGD
@@ -262,7 +323,7 @@ void server_dpsgd(Data* data, int nClients, double eta, double rho, double delta
 		pthread_mutex_lock(arg->lock_z);
 		for (int i = 0; i < d; i++){
 			// update z
-			v[i] = delta* v[i] - eta * gradwk[i];
+			v[i] = delta * v[i] - eta * gradwk[i];
 			arg->z[i] += v[i];
 		}
 		pthread_mutex_unlock(arg->lock_z);
@@ -271,64 +332,6 @@ void server_dpsgd(Data* data, int nClients, double eta, double rho, double delta
 	printf("Server stopped.");
 }
 
-// calculate the gradient, suppose the original problem is logistic regression
-// make sure len(w) == len(gradOut) == data->nCols
-void grad(double *w, double* gradOut, Data* data) {
-	memset(gradOut, 0, sizeof(double) * data->nCols);
-	for (int i = 0; i < data->nRows; ++i) {
-		DataRow *thisRow = data->dataRows + i;
-		// calculate w^Tx
-		double innerProd = 0.0;
-		for (int j = 0; j < thisRow->nLength; ++j) {
-			long idx = thisRow->elements[j].colIdx;
-			innerProd += w[idx] * thisRow->elements[j].value;
-		}
-		if (thisRow->output == -1) {
-			double coef = 1.0 - 1.0 / (exp(innerProd) + 1.0);
-			for (int j = 0; j < thisRow->nLength; ++j) {
-				long idx = thisRow->elements[j].colIdx;
-				gradOut[idx] += thisRow->elements[j].value * coef;
-			}
-		}
-		else { // thisRow->output == 1
-			double coef = -1.0 / (exp(innerProd) + 1.0);
-			for (int j = 0; j < thisRow->nLength; ++j) {
-				long idx = thisRow->elements[j].colIdx;
-				gradOut[idx] += thisRow->elements[j].value * coef;
-			}
-		}
-	}
-}
-
-// client evrsgd side
-void client_evrsgd(int clientId, double rho, double eta, double delta) {
-	Data data;
-	collectData(&data);
-	printf("Data received by client: %ld rows, %ld columns\n", data.nRows, data.nCols);
-	int d = data.nCols;
-	double *wk = (double*)calloc(d + 1, sizeof(double));
-	double *z = (double*)calloc(d, sizeof(double));
-	double *gradwk = (double*)malloc(sizeof(double) * d);
-	double *v = (double*)calloc(d, sizeof(double));
-	time_t now;
-	srand(clientId + (unsigned int)time(&now)); // set random seed
-	while (1){
-		// choose number of iterations randomly
-		int n_iter = 1; //rand() % (max_iter - min_iter) + min_iter;
-		for (int inner = 0; inner < n_iter; ++inner) {
-			grad(wk, gradwk, &data);
-			for (int i=0; i<d; i++){
-				v[i] = delta * v[i] - eta *gradwk[i];
-				wk[i] = wk[i] + v[i] - eta * rho * (wk[i] - z[i]);
-			}
-		}
-		// send client ID to server
-		wk[d]= (double) clientId;
-		MPI_Send(wk, d + 1, MPI_DOUBLE, 0, W_TAG, MPI_COMM_WORLD);
-		MPI_Recv(z, d, MPI_DOUBLE, 0, Z_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	}
-	rmData(&data);
-}
 
 // client for eamsgd and easgd
 void client_eamsgd(int clientId, double rho, double eta, double delta) {
@@ -360,6 +363,7 @@ void client_eamsgd(int clientId, double rho, double eta, double delta) {
 	}
 	rmData(&data);
 }
+
 /*
 // client downpour sgd
 void client_dpsgd(int clientId,  int size, double eta, double delta) {
@@ -399,8 +403,8 @@ void client_dpsgd(int clientId, double rho, double eta) {
 	printf("Data received by client: %ld rows, %ld columns\n", data.nRows, data.nCols);
 	int d = data.nCols;
 	double *z = (double*)calloc(d, sizeof(double));
-	double *gradwk = (double*)malloc(sizeof(double) * d);
-	while (1){
+	double *gradwk = (double*)malloc(sizeof(double) * (d + 1));
+	while (1) {
 		// choose number of iterations randomly
 		int n_iter = 1; //rand() % (max_iter - min_iter) + min_iter;
 		for (int inner = 0; inner < n_iter; ++inner) {
@@ -452,19 +456,19 @@ int main(int argc, char** argv) {
 		pthread_create(&monitor_thread, NULL, &functionVal, &arg);
 		if (method_flag == 0) {
 			printf("Running EVRSGD method");
-			server_evrsgd(&data, size - 1, rho, eta, &arg);
+			server_evrsgd(&data, size - 1, eta, rho, &arg);
 		}
 		else if (method_flag == 1) {
 			printf("Running EASGD method");
-			server_easgd(&data, size - 1, rho, eta, &arg);
+			server_easgd(&data, size - 1, eta, rho, &arg);
 		}
 		else if (method_flag == 2) {
 			printf("Running EAMSGD method");
-			server_easgd(&data, size -1, rho, eta, &arg);
+			server_easgd(&data, size -1,eta, rho, &arg);
 		}
 		else if (method_flag == 3) {
 			printf("Running DOWNPOUR method");
-			server_dpsgd(&data, size -1, rho, eta, 0, &arg);
+			server_dpsgd(&data, size -1, eta, rho, 0, &arg);
 		}
 		else {
 			fprintf(stderr, "Invalid method flag\n");
