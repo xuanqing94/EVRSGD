@@ -415,39 +415,6 @@ void client_dpsgd(int clientId, double rho, double eta) {
 }
 
 int main(int argc, char** argv) {
-<<<<<<< HEAD
-  int rank, size;
-  char input_file_name[1024] = {0};
-  char test_file_name[1024] = {0};
-  double eta;
-  double rho;
-  double eps = 1.0e-5;
-  int method_flag;
-  parse_command_line(argc, argv, input_file_name, test_file_name, &eta, &rho, &method_flag, &eps, rank); 
-  MPI_Init(&argc, &argv);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-  printf("rank=%d\n", rank);
-  if (rank == 0) { // for server
-    // load data
-    Data data;
-    loadData(input_file_name, &data);
-    printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
-    
-    std::atomic<bool> stop(false);
-    int interval = 1;
-    pthread_mutex_t lock_z;
-    pthread_mutex_init(&lock_z, NULL);
-    double *z = (double*)calloc(data.nCols, sizeof(double));
-    // function arguments
-    Arg arg;
-    arg.data = &data;
-    arg.z = z;
-    arg.lock_z = &lock_z;
-    arg.interval = interval;
-    arg.eps = eps;
-    arg.stop = &stop;
-=======
 	int rank, size;
 	char input_file_name[1024] = {0};
 	char test_file_name[1024] = {0};
@@ -466,8 +433,6 @@ int main(int argc, char** argv) {
 		Data data;
 		loadData(input_file_name, &data);
 		printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
->>>>>>> f3f23da320ed5196fbc4fdfc337f53b302b6cfb4
-
 		std::atomic<bool> stop(false);
 		int interval = 1;
 		pthread_mutex_t lock_z;
