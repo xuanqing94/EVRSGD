@@ -1,5 +1,6 @@
-CXX=mpic++
-FLAGS=-O2 -std=c++11
+MPI_PATH=/home/cmhcbb/mpich
+CXX=${MPI_PATH}/bin/mpic++
+FLAGS=-O2 -std=c++11 -pthread -L${MPI_PATH}/lib -I${MPI_PATH}/include 
 
 evrsgd.out: main.o command_line.o loader.o
 	${CXX} main.o command_line.o loader.o -o evrsgd.out ${FLAGS}
