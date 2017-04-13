@@ -437,7 +437,6 @@ int main(int argc, char** argv) {
 		Data data;
 		loadData(input_file_name, &data);
 		printf("nRows: %ld, nFeature: %ld\n", data.nRows, data.nCols);
-
 		std::atomic<bool> stop(false);
 		int interval = 1;
 		pthread_mutex_t lock_z;
