@@ -229,7 +229,7 @@ void client_evrsgd(int clientId, double rho, double eta, double delta) {
 	srand(clientId + (unsigned int)time(&now)); // set random seed
 	while (1){
 		// choose number of iterations randomly
-		int n_iter = 1; //rand() % (max_iter - min_iter) + min_iter;
+		int n_iter = 10; //rand() % (max_iter - min_iter) + min_iter;
 		for (int inner = 0; inner < n_iter; ++inner) {
 			grad(wk, gradwk, &data);
 			for (int i=0; i<d; i++){

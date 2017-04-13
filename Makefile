@@ -1,5 +1,5 @@
-CXX=mpic++
-FLAGS=-O2 -std=c++11
+CXX=/usr/local/openmpi/bin/mpic++
+FLAGS=-lpthread -O2 -std=c++11
 
 evrsgd.out: main.o command_line.o loader.o
 	${CXX} main.o command_line.o loader.o -o evrsgd.out ${FLAGS}
